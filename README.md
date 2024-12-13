@@ -1,6 +1,6 @@
 # LovelyForm 
 
-从lovelymem中分离出来的表格展示工具，为之后lovelymem开源完全体做准备，支持命令自定义执行
+从lovelymem中分离重构出来的表格展示工具，为之后lovelymem开源完全体做准备，支持命令自定义执行
 
 ## 功能特点
 
