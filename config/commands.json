@@ -1,0 +1,17 @@
+[
+  {
+    "name": "自定义1",
+    "prefix": "cmd /c echo",
+    "suffix": "123"
+  },
+  {
+    "name": "自定义2",
+    "prefix": "cmd /c echo",
+    "suffix": "456"
+  },
+  {
+    "name": "自定义3",
+    "prefix": "cmd /c echo",
+    "suffix": "789"
+  }
+]
