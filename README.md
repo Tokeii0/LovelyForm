@@ -1,6 +1,6 @@
-# LovelyForm - CSV表格浏览工具
+# LovelyForm 
 
-一个基于Python和PySide6开发的现代化CSV表格浏览工具。
+从lovelymem中分离出来的表格展示工具，目前为初期
 
 ## 功能特点
 
