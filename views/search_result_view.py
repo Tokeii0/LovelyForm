@@ -1,17 +1,51 @@
 from PySide6.QtWidgets import (QTableWidget, QTableWidgetItem, QHeaderView,
-                             QGroupBox, QVBoxLayout)
+                             QGroupBox, QVBoxLayout, QHBoxLayout, QPushButton,
+                             QWidget, QStyledItemDelegate, QLineEdit)
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPalette
 
-class SearchResultView(QGroupBox):
+class TextItemDelegate(QStyledItemDelegate):
+    def createEditor(self, parent, option, index):
+        if index.column() == 0:  # 行号列不可编辑
+            return None
+        editor = QLineEdit(parent)
+        return editor
+
+    def setEditorData(self, editor, index):
+        value = index.data(Qt.DisplayRole)
+        if value is not None:
+            editor.setText(str(value))
+            editor.selectAll()
+
+    def updateEditorGeometry(self, editor, option, index):
+        editor.setGeometry(option.rect)
+
+class SearchResultView(QWidget):
     # 定义双击信号
     item_double_clicked = Signal(int)  # 发送行号
 
     def __init__(self, parent=None):
-        super().__init__("搜索结果", parent)
+        super().__init__(parent)
         self._init_ui()
 
     def _init_ui(self):
-        layout = QVBoxLayout()
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(2, 2, 2, 2)
+        main_layout.setSpacing(1)
+
+        # 创建标题栏布局
+        title_layout = QHBoxLayout()
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 添加标题标签
+        self.group_box = QGroupBox("搜索结果")
+        
+        # 添加关闭按钮
+        close_button = QPushButton("×")
+        close_button.setFixedSize(16, 16)
+        close_button.clicked.connect(self.hide)
+        title_layout.addWidget(self.group_box)
+        title_layout.addWidget(close_button, 0, Qt.AlignTop)
         
         # 创建搜索结果表格
         self.result_table = QTableWidget()
@@ -19,65 +53,60 @@ class SearchResultView(QGroupBox):
         self.result_table.setHorizontalHeaderLabels(["行号", "列名", "内容"])
         self.result_table.horizontalHeader().setStretchLastSection(True)
         self.result_table.verticalHeader().setVisible(False)
-        self.result_table.itemDoubleClicked.connect(self._on_item_double_clicked)
+        
+        # 设置自定义代理以处理编辑行为
+        delegate = TextItemDelegate()
+        self.result_table.setItemDelegate(delegate)
         
         # 设置表格样式
         self._setup_table_style()
         
-        layout.addWidget(self.result_table)
-        self.setLayout(layout)
+        # 将表格添加到组框中
+        group_layout = QVBoxLayout()
+        group_layout.setContentsMargins(2, 2, 2, 2)
+        group_layout.setSpacing(1)
+        group_layout.addWidget(self.result_table)
+        self.group_box.setLayout(group_layout)
         
-        # 设置组框的最大高度
-        self.setMaximumHeight(200)
-        self.setVisible(False)
+        main_layout.addLayout(title_layout)
+        self.setLayout(main_layout)
+        
+        # 设置组件的高度
+        self.setMaximumHeight(220)
+        self.setMinimumHeight(120)
 
     def _setup_table_style(self):
         # 设置表格的固定高度
         self.result_table.setMinimumHeight(100)
-        self.result_table.setMaximumHeight(150)
+        self.result_table.setMaximumHeight(160)
 
-        # 设置表头左对齐
-        self.result_table.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        # 设置表头
+        header = self.result_table.horizontalHeader()
+        header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        header.setHighlightSections(False)
+        header.setMinimumSectionSize(40)
+        header.setFixedHeight(20)
         
-        # 设置表格样式
-        self.result_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        # 使用系统主题色
+        header.setAutoFillBackground(True)
+        palette = self.palette()
+        header.setPalette(palette)
+        
+        # 设置基本列宽
+        self.result_table.setColumnWidth(0, 40)  # 行号列
+        self.result_table.setColumnWidth(1, 120)  # 列名列
+        header.setSectionResizeMode(2, QHeaderView.Stretch)  # 内容列自动拉伸
+        
+        # 设置表格属性
+        self.result_table.setEditTriggers(QTableWidget.DoubleClicked)  # 只允许双击触发编辑
         self.result_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.result_table.setStyleSheet("""
-            QTableWidget {
-                gridline-color: #d0d0d0;
-                border: 1px solid #d0d0d0;
-            }
-            QTableWidget::item {
-                padding-left: 5px;
-                padding-right: 5px;
-                border: none;
-            }
-            QHeaderView::section {
-                background-color: #f0f0f0;
-                padding-left: 5px;
-                padding-right: 5px;
-                border: none;
-                border-right: 1px solid #d0d0d0;
-                border-bottom: 1px solid #d0d0d0;
-            }
-        """)
+        self.result_table.setWordWrap(True)  # 允许文本换行
         
-        # 设置行高
-        self.result_table.verticalHeader().setDefaultSectionSize(24)
-        self.result_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
-
-    def _on_item_double_clicked(self, item):
-        row = item.row()
-        # 获取行号单元格的值并转换为整数
-        row_num = int(self.result_table.item(row, 0).text())
-        self.item_double_clicked.emit(row_num)
+        # 设置行高自适应
+        self.result_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
 
     def update_results(self, results):
-        """更新搜索结果
-        
-        Args:
-            results: List of tuples (row_num, col_name, value)
-        """
+        """更新搜索结果"""
         self.result_table.setRowCount(0)
         
         if not results:
@@ -100,9 +129,34 @@ class SearchResultView(QGroupBox):
             for item in (row_item, col_item, value_item):
                 item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             
+            # 设置行号列为不可编辑
+            row_item.setFlags(row_item.flags() & ~Qt.ItemIsEditable)
+            
+            # 设置单元格
             self.result_table.setItem(i, 0, row_item)
             self.result_table.setItem(i, 1, col_item)
             self.result_table.setItem(i, 2, value_item)
-
+        
+        # 调整列宽以适应内容
         self.result_table.resizeColumnsToContents()
+        
+        # 设置最小和最大列宽限制
+        if self.result_table.columnWidth(0) > 60:
+            self.result_table.setColumnWidth(0, 60)
+        if self.result_table.columnWidth(1) > 150:
+            self.result_table.setColumnWidth(1, 150)
+        
         self.setVisible(True)
+
+    def clear(self):
+        """清空搜索结果"""
+        self.result_table.setRowCount(0)
+        self.setVisible(False)
+
+    def changeEvent(self, event):
+        """处理主题变化事件"""
+        if event.type() == event.Type.PaletteChange:
+            # 更新表头调色板
+            header = self.result_table.horizontalHeader()
+            header.setPalette(self.palette())
+        super().changeEvent(event)

@@ -1,29 +1,62 @@
+from lovelyform.models.data_manager import DataManager
+from lovelyform.views.search_result_view import SearchResultView
+from lovelyform.views.statistics_view import StatisticsView
+from lovelyform.plugins.plugin_manager import PluginManager
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLineEdit, QLabel, QSpinBox, QTableView,
                              QHeaderView, QMessageBox, QMenu, QFileDialog, QToolBar,
-                             QCheckBox, QInputDialog, QDialog, QGroupBox)
+                             QCheckBox, QInputDialog, QDialog, QGroupBox, QFrame,
+                             QProgressBar, QSplitter, QApplication)
 from PySide6.QtCore import Qt, QSortFilterProxyModel
-from PySide6.QtGui import QAction
-import pandas as pd
-import numpy as np
-import os
-from models.table_model import PandasModel
-from views.search_result_view import SearchResultView
-from views.statistics_view import StatisticsView
-from plugins.plugin_manager import PluginManager
-from plugins import CellPlugin
+from PySide6.QtGui import QAction, QIcon, QGuiApplication
 
-class CSVViewer(QMainWindow):
+import os
+import sys
+
+# 添加主程序路径
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, project_root)
+
+from lovelyform.models.data_manager import DataManager
+from lovelyform.views.search_result_view import SearchResultView
+from lovelyform.views.statistics_view import StatisticsView
+from lovelyform.plugins.plugin_manager import PluginManager
+from lovelyform.plugins.command_executor import CommandConfigDialog
+
+# 导入拆分出的模块
+from lovelyform.views.ui_components import UIComponentMixin
+from lovelyform.views.table_operations import TableOperationsMixin
+from lovelyform.views.file_operations import FileOperationsMixin
+from lovelyform.views.search_filter import SearchFilterMixin
+from lovelyform.views.theme_manager import ThemeManagerMixin
+from lovelyform.views.pagination import PaginationMixin
+from lovelyform.views.floating_toolbar import FloatingToolBar
+
+# 导入样式配置
+import ui.styles
+
+class CSVViewer(QMainWindow, UIComponentMixin, TableOperationsMixin,
+               FileOperationsMixin, SearchFilterMixin, ThemeManagerMixin,
+               PaginationMixin):
     def __init__(self):
         super().__init__()
+        self.variables = {}
         self.setWindowTitle("LovelyForm")
         self.setGeometry(100, 100, 1200, 800)
+        self.setWindowFlags(Qt.FramelessWindowHint)  # 移除原生标题栏
         
-        # 初始化数据
-        self.df = pd.DataFrame()
+        # 初始化数据管理器
+        self.data_manager = DataManager()
+        self.current_file = None
+        self.proxy_model = QSortFilterProxyModel()
+        
+        # 初始化分页相关的属性
         self.current_page = 0
         self.page_size = 100
-        self.proxy_model = QSortFilterProxyModel()
+        
+        # 初始化状态栏
+        self.status_bar = self.statusBar()
+        self.status_bar.showMessage("就绪")
         
         # 初始化分页控件
         self.prev_btn = None
@@ -33,100 +66,83 @@ class CSVViewer(QMainWindow):
         
         self.plugin_manager = PluginManager()
         
-        self._init_ui()
+        # 加载用户主题设置
+        self.load_user_theme()
+        self._init_ui()  # 只调用本类的_init_ui方法
+        self.update_all_styles()
 
     def _init_ui(self):
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
+        """初始化UI"""
+        # 创建主布局
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # 创建自定义标题栏
+        title_bar, title_layout = self.create_title_bar()
+        
+        # 添加主题切换按钮
+        self.theme_button = self.create_circle_button(ui.styles.theme_button_color)
+        self.theme_button.clicked.connect(self.toggle_theme)
+        self.theme_button.setToolTip("切换主题")
+        
+        # 添加最小化按钮
+        self.min_button = self.create_circle_button(ui.styles.minimize_button_color)
+        self.min_button.clicked.connect(self.showMinimized)
+        self.min_button.setToolTip("最小化")
+        
+        # 添加最大化/还原按钮
+        self.max_button = self.create_circle_button(ui.styles.maximize_button_color)
+        self.max_button.clicked.connect(self.toggle_maximize)
+        self.max_button.setToolTip("最大化")
+        
+        # 添加关闭按钮
+        self.close_button = self.create_circle_button(ui.styles.close_button_color)
+        self.close_button.clicked.connect(self.close)
+        self.close_button.setToolTip("关闭")
+        
+        title_layout.addWidget(self.theme_button)
+        title_layout.addWidget(self.min_button)
+        title_layout.addWidget(self.max_button)
+        title_layout.addWidget(self.close_button)
+        
+        main_layout.addWidget(title_bar)
+        
+        # 内容区域
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(5, 5, 5, 5)
         
         # 工具栏区域
-        toolbar_group = QGroupBox("工具栏")
-        toolbar_layout = QHBoxLayout()
-        toolbar_group.setLayout(toolbar_layout)
+        toolbar_group, toolbar_layout = self.create_toolbar()
         
         # 文件操作按钮
         load_btn = QPushButton("打开文件")
         load_btn.setMinimumWidth(80)
-        load_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                padding: 5px 10px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
-        load_btn.clicked.connect(self.load_csv)
+        load_btn.clicked.connect(self.load_csv_file)
         toolbar_layout.addWidget(load_btn)
         
         save_btn = QPushButton("保存文件")
         save_btn.setMinimumWidth(80)
-        save_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #008CBA;
-                color: white;
-                border: none;
-                padding: 5px 10px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #007399;
-            }
-        """)
         save_btn.clicked.connect(self.save_csv)
         toolbar_layout.addWidget(save_btn)
         
-        # 命令配置按钮
-        command_btn = QPushButton("命令配置")
+        # 添加命令编辑按钮
+        command_btn = QPushButton("命令编辑")
         command_btn.setMinimumWidth(80)
-        command_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #9C27B0;
-                color: white;
-                border: none;
-                padding: 5px 10px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #7B1FA2;
-            }
-        """)
         command_btn.clicked.connect(self.show_command_config)
         toolbar_layout.addWidget(command_btn)
         
         # 搜索区域
-        toolbar_layout.addSpacing(20)  # 添加一些间距
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("搜索...")
-        self.search_input.setMinimumWidth(200)
-        self.search_input.setStyleSheet("""
-            QLineEdit {
-                padding: 5px;
-                border: 1px solid #ccc;
-                border-radius: 4px;
-            }
-        """)
-        toolbar_layout.addWidget(self.search_input)
+        toolbar_layout.addSpacing(20)
+        self.global_search_input = QLineEdit()
+        self.global_search_input.setPlaceholderText("在整个表格中搜索内容...")
+        self.global_search_input.setMinimumWidth(200)
+        toolbar_layout.addWidget(self.global_search_input)
         
-        search_btn = QPushButton("搜索")
+        search_btn = QPushButton("全局搜索")
         search_btn.setMinimumWidth(60)
-        search_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ff9800;
-                color: white;
-                border: none;
-                padding: 5px 10px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #f57c00;
-            }
-        """)
-        search_btn.clicked.connect(self.search_table)
+        search_btn.clicked.connect(lambda: self.search_table())
         toolbar_layout.addWidget(search_btn)
         
         # 隐藏空白列复选框
@@ -135,349 +151,82 @@ class CSVViewer(QMainWindow):
         self.hide_empty_checkbox.stateChanged.connect(self.on_hide_empty_changed)
         toolbar_layout.addWidget(self.hide_empty_checkbox)
         
-        toolbar_layout.addStretch()  # 添加弹性空间
+        # 添加插件菜单按钮
+        plugins_menu = QMenu(self)
+        plugins_button = QPushButton("全局插件菜单")
+        plugins_button.setMenu(plugins_menu)
         
-        # 添加工具栏到主布局
-        layout.addWidget(toolbar_group)
+        # 为每个插件创建菜单项
+        for plugin_name, plugin_class in self.plugin_manager.get_table_plugins().items():
+            plugin_instance = plugin_class()
+            action = plugins_menu.addAction(plugin_instance.button_text)
+            # 使用lambda创建闭包来保存plugin_instance
+            action.triggered.connect(lambda checked=False, p=plugin_instance: self.handle_table_plugin(p))
+            if hasattr(plugin_instance, 'description'):
+                action.setToolTip(plugin_instance.description)
+        
+        toolbar_layout.addWidget(plugins_button)
+        toolbar_layout.addStretch()
+        
+        # 添加进度条
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximumWidth(200)
+        self.progress_bar.setMinimumWidth(200)
+        self.progress_bar.setVisible(False)
+        toolbar_layout.addWidget(self.progress_bar)
+        
+        content_layout.addWidget(toolbar_group)
         
         # 表格视图
-        self.table_view = QTableView()
-        self.table_view.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.table_view.customContextMenuRequested.connect(self.create_context_menu)
-        self.proxy_model = QSortFilterProxyModel()
-        self.table_view.setModel(self.proxy_model)
-        
-        # 设置表格样式
-        self.table_view.setStyleSheet("""
-            QTableView {
-                gridline-color: #d0d0d0;
-                border: 1px solid #d0d0d0;
-            }
-            QHeaderView::section {
-                background-color: #f0f0f0;
-                padding: 5px;
-                border: none;
-                border-right: 1px solid #d0d0d0;
-                border-bottom: 1px solid #d0d0d0;
-            }
-        """)
-        
-        # 设置表头样式
-        header = self.table_view.horizontalHeader()
-        header.setStretchLastSection(True)
-        header.setSectionsMovable(True)
-        header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        
-        layout.addWidget(self.table_view)
-        
-        # 分页控件
-        self._init_pagination(layout)
+        self.table_view, self.table_container = self.setup_table_view()
+        content_layout.addWidget(self.table_container)
         
         # 搜索结果视图
-        self.search_view = SearchResultView(self)
-        self.search_view.item_double_clicked.connect(self.jump_to_result)
-        layout.addWidget(self.search_view)
-
-    def _init_pagination(self, layout):
-        page_control = QHBoxLayout()
+        self.search_result_view = SearchResultView(self)
+        self.search_result_view.setVisible(False)
+        self.search_result_view.item_double_clicked.connect(self.on_search_result_double_clicked)
+        content_layout.addWidget(self.search_result_view)
         
-        # 添加全局插件工具栏
-        plugin_toolbar = QToolBar()
-        plugin_toolbar.setStyleSheet("""
-            QToolBar {
-                spacing: 5px;
-                padding: 0 5px;
-            }
-            QToolButton {
-                background-color: #673AB7;
-                color: white;
-                border: none;
-                padding: 5px 10px;
-                border-radius: 4px;
-                min-width: 80px;
-            }
-            QToolButton:hover {
-                background-color: #5E35B1;
-            }
-        """)
+        # 分页控件
+        pagination_widget = self.create_pagination_controls()
+        content_layout.addWidget(pagination_widget)
         
-        for name, plugin_class in self.plugin_manager.get_table_plugins().items():
-            plugin = plugin_class()
-            action = QAction(plugin.button_text, self)
-            action.setToolTip(plugin.description)
-            action.triggered.connect(lambda checked, p=plugin: self.handle_table_plugin(p))
-            plugin_toolbar.addAction(action)
-        page_control.addWidget(plugin_toolbar)
-        
-        page_control.addStretch()  # 添加弹性空间，使后面的控件靠右
-        
-        # 每页显示数量
-        page_control.addWidget(QLabel("每页行数:"))
-        self.page_size_spin = QSpinBox()
-        self.page_size_spin.setRange(10, 1000)
-        self.page_size_spin.setValue(self.page_size)
-        self.page_size_spin.valueChanged.connect(self.update_page_size)
-        page_control.addWidget(self.page_size_spin)
-        
-        # 翻页按钮
-        self.prev_btn = QPushButton("上一页")
+        # 设置信号连接
         self.prev_btn.clicked.connect(self.prev_page)
-        page_control.addWidget(self.prev_btn)
-        
-        # 页码显示
-        self.page_label = QLabel("页码: 1")
-        page_control.addWidget(self.page_label)
-        
-        self.next_btn = QPushButton("下一页")
         self.next_btn.clicked.connect(self.next_page)
-        page_control.addWidget(self.next_btn)
+        self.page_size_spin.valueChanged.connect(self.update_page_size)
+        self.page_jump_btn.clicked.connect(self.jump_to_page)
         
-        layout.addLayout(page_control)
+        main_layout.addWidget(content_widget)
+        
+        # 创建中心窗口
+        central_widget = QWidget()
+        central_widget.setLayout(main_layout)
+        self.setCentralWidget(central_widget)
 
-    def load_csv(self):
-        filename, _ = QFileDialog.getOpenFileName(
-            self,
-            "打开CSV文件",
-            "",
-            "CSV files (*.csv);;All files (*.*)"
-        )
-        
-        if filename:
-            try:
-                # 记录当前文件名
-                self.current_file = filename
-                
-                # 使用分块读取大文件
-                self.df = pd.read_csv(filename, chunksize=None)
-                self.current_page = 0
-                self.update_table()
-                
-                # 更新窗口标题
-                self.setWindowTitle(f"CSV查看器 - {os.path.basename(filename)}")
-                
-            except Exception as e:
-                QMessageBox.critical(self, "错误", f"无法加载文件：{str(e)}")
+    def toggle_maximize(self):
+        """切换最大化/还原窗口状态"""
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
 
-    def save_csv(self):
-        if self.df.empty:
-            return
-        
-        file_name, _ = QFileDialog.getSaveFileName(
-            self, "保存CSV文件", "", "CSV文件 (*.csv);;所有文件 (*.*)")
-        if file_name:
-            try:
-                self.df.to_csv(file_name, index=False)
-            except Exception as e:
-                QMessageBox.critical(self, "错误", f"保存CSV文件时出错: {str(e)}")
+    def mousePressEvent(self, event):
+        """处理鼠标按下事件，用于窗口拖动"""
+        if event.button() == Qt.LeftButton:
+            if self.title_bar.geometry().contains(event.pos()):
+                self._drag_pos = event.pos()
 
-    def update_table(self):
-        """更新表格显示"""
-        if self.df.empty:
-            return
-            
-        # 计算当前页的数据范围
-        start = self.current_page * self.page_size
-        end = min(start + self.page_size, len(self.df))
-        
-        # 更新模型
-        current_df = self.df.iloc[start:end]
-        model = PandasModel(current_df)
-        self.proxy_model.setSourceModel(model)
-        self.table_view.setModel(self.proxy_model)
-        
-        # 如果需要隐藏空白列
-        if self.hide_empty_checkbox.isChecked():
-            self.hide_empty_columns(current_df)
-            
-        # 调整列宽
-        self.adjust_column_widths()
-        
-        # 更新分页状态
-        total_pages = (len(self.df) - 1) // self.page_size + 1
-        self.page_label.setText(f"页码: {self.current_page + 1}/{total_pages}")
-        
-        # 更新按钮状态
-        self.prev_btn.setEnabled(self.current_page > 0)
-        self.next_btn.setEnabled(self.current_page < total_pages - 1)
+    def mouseMoveEvent(self, event):
+        """处理鼠标移动事件，用于窗口拖动"""
+        if hasattr(self, '_drag_pos'):
+            if event.buttons() == Qt.LeftButton:
+                self.move(self.pos() + event.pos() - self._drag_pos)
 
-    def hide_empty_columns(self, df):
-        """隐藏空白列"""
-        for column in df.columns:
-            is_empty = df[column].isna().all() or \
-                      (df[column].astype(str).str.strip() == '').all()
-            if is_empty:
-                col_index = df.columns.get_loc(column)
-                self.table_view.hideColumn(col_index)
-            else:
-                col_index = df.columns.get_loc(column)
-                self.table_view.showColumn(col_index)
-
-    def adjust_column_widths(self):
-        """自适应列宽，根据每列内容的最大宽度来设置"""
-        header = self.table_view.horizontalHeader()
-        
-        # 获取表格的字体度量对象
-        font_metrics = self.table_view.fontMetrics()
-        
-        for column in range(self.proxy_model.columnCount()):
-            # 获取列头文本宽度
-            header_text = self.proxy_model.headerData(column, Qt.Horizontal, Qt.DisplayRole)
-            max_width = font_metrics.horizontalAdvance(str(header_text)) + 20  # 添加一些边距
-            
-            # 遍历该列的所有行，找出最长的内容
-            for row in range(self.proxy_model.rowCount()):
-                index = self.proxy_model.index(row, column)
-                content = str(self.proxy_model.data(index, Qt.DisplayRole))
-                content_width = font_metrics.horizontalAdvance(content) + 20  # 添加一些边距
-                max_width = max(max_width, content_width)
-            
-            # 限制最大宽度，避免过宽
-            max_width = min(max_width, 300)  # 最大宽度限制为300像素
-            
-            # 确保最小宽度不小于50像素
-            max_width = max(max_width, 50)
-            
-            # 设置列宽
-            self.table_view.setColumnWidth(column, max_width)
-            
-            # 设置列可以调整大小
-            header.setSectionResizeMode(column, QHeaderView.Interactive)
-
-    def on_hide_empty_changed(self, state):
-        """空白列隐藏状态改变时的处理函数"""
-        self.update_table()
-
-    def search_table(self):
-        search_text = self.search_input.text().strip()
-        if not search_text or self.df.empty:
-            self.search_view.setVisible(False)
-            return
-
-        results = []
-        for col in self.df.columns:
-            # 将列转换为字符串类型进行搜索
-            mask = self.df[col].astype(str).str.contains(search_text, case=False, na=False)
-            matches = self.df[mask]
-            
-            for idx, value in matches[col].items():
-                # 行号从0开始，但显示时从1开始
-                results.append((idx, col, str(value)))
-
-        self.search_view.update_results(results)
-
-    def create_context_menu(self, pos):
-        menu = QMenu(self)
-        
-        # 获取选中的单元格
-        indexes = self.table_view.selectedIndexes()
-        if not indexes:
-            return
-            
-        # 获取当前文件名
-        current_file = getattr(self, 'current_file', '')
-        
-        # 获取选中的列名
-        selected_columns = set()
-        model = self.table_view.model()
-        for index in indexes:
-            col_index = index.column()
-            col_name = model.headerData(col_index, Qt.Horizontal, Qt.DisplayRole)
-            selected_columns.add(col_name)
-        
-        # 添加插件菜单项
-        plugins_added = False
-        for plugin_name, plugin_class in self.plugin_manager.get_cell_plugins().items():
-            # 如果是命令执行插件，plugin_class 已经是实例了，不需要再实例化
-            if isinstance(plugin_class, CellPlugin):
-                plugin = plugin_class
-            else:
-                plugin = plugin_class()
-            
-            # 检查文件名是否匹配
-            if not plugin.match_file(os.path.basename(current_file)):
-                continue
-                
-            # 检查是否至少有一个选中的列匹配插件的列名模式
-            if not any(plugin.match_column(col_name) for col_name in selected_columns):
-                continue
-            
-            # 创建菜单项
-            action = QAction(plugin.name, menu)
-            action.setStatusTip(plugin.description)
-            action.triggered.connect(lambda checked, p=plugin: self.handle_cell_plugin(p))
-            menu.addAction(action)
-            plugins_added = True
-            
-        # 如果没有添加任何插件，显示提示信息
-        if not plugins_added:
-            action = QAction("没有可用的插件", menu)
-            action.setEnabled(False)
-            menu.addAction(action)
-            
-        menu.exec_(self.table_view.viewport().mapToGlobal(pos))
-        
-    def show_plugin_config(self, plugin):
-        """显示插件配置对话框"""
-        if hasattr(plugin, 'show_config_dialog'):
-            dialog = plugin.show_config_dialog(self)
-            dialog.exec_()
-            
-    def handle_cell_plugin(self, plugin):
-        # 处理选中的单元格
-        indexes = self.table_view.selectedIndexes()
-        if not hasattr(self, 'df') or not indexes:
-            return
-            
-        # 过滤出匹配列名模式的单元格
-        filtered_cells = []
-        model = self.table_view.model()
-        for index in indexes:
-            col_index = index.column()
-            col_name = model.headerData(col_index, Qt.Horizontal, Qt.DisplayRole)
-            if plugin.match_column(col_name):
-                filtered_cells.append((index.row(), col_index))
-                
-        if filtered_cells:
-            self.df = plugin.process_cells(self.df, filtered_cells)
-            self.update_table()
-            
-    def handle_table_plugin(self, plugin):
-        # 处理整个表格
-        if hasattr(self, 'df'):
-            result = plugin.process_table(self.df)
-            # 在新窗口中显示结果
-            if isinstance(result, pd.DataFrame):
-                dialog = StatisticsView(result, self)
-                dialog.exec_()
-            else:
-                QMessageBox.information(self, "处理结果", str(result))
-
-    def jump_to_result(self, row_num):
-        """跳转到搜索结果所在行
-        
-        Args:
-            row_num: 实际的行号（从1开始）
-        """
-        # 将行号转换为0基索引
-        row_index = row_num - 1
-        
-        # 计算目标页码
-        target_page = row_index // self.page_size
-        
-        # 如果页码发生变化，更新当前页
-        if target_page != self.current_page:
-            self.current_page = target_page
-            self.update_table()
-        
-        # 计算在当前页中的相对行号
-        relative_row = row_index % self.page_size
-        
-        # 选中并滚动到目标行
-        self.table_view.selectRow(relative_row)
-        self.table_view.scrollTo(
-            self.table_view.model().index(relative_row, 0),
-            QTableView.PositionAtCenter
-        )
+    def mouseReleaseEvent(self, event):
+        """处理鼠标释放事件"""
+        if hasattr(self, '_drag_pos'):
+            del self._drag_pos
 
     def prev_page(self):
         if self.current_page > 0:
@@ -485,20 +234,108 @@ class CSVViewer(QMainWindow):
             self.update_table()
 
     def next_page(self):
-        total_pages = (len(self.df) - 1) // self.page_size + 1
+        page_size = self.page_size_spin.value() if hasattr(self, 'page_size_spin') else self.page_size
+        total_pages = (len(self.data_manager.df) - 1) // page_size + 1
         if self.current_page < total_pages - 1:
             self.current_page += 1
             self.update_table()
 
     def update_page_size(self):
+        """更新每页显示的行数"""
         self.page_size = self.page_size_spin.value()
-        self.current_page = 0  # 重置到第一页
+        self.current_page = 0
         self.update_table()
 
+    def update_page_label(self):
+        """更新页码显示标签"""
+        if not hasattr(self, 'page_label') or self.data_manager.df.empty:
+            return
+            
+        page_size = self.page_size_spin.value() if hasattr(self, 'page_size_spin') else self.page_size
+        total_pages = (len(self.data_manager.df) - 1) // page_size + 1
+        current_page = self.current_page + 1
+        self.page_label.setText(f"页码: {current_page}/{total_pages}")
+
+    def update_title(self, filename=None):
+        """更新窗口标题"""
+        if filename:
+            self.title_label.setText(f"LovelyForm - {filename}")
+        elif self.current_file:
+            self.title_label.setText(f"LovelyForm - {self.current_file}")
+        else:
+            self.title_label.setText("LovelyForm")
+
+    def on_hide_empty_changed(self, state):
+        """空白列隐藏状态改变时的处理函数"""
+        self.update_table()
+
+    def on_search_result_double_clicked(self, row_num):
+        """处理搜索结果双击事件"""
+        # 确保搜索结果视图可见
+        self.search_result_view.setVisible(True)
+        
+        # 计算目标页码
+        page = row_num // self.page_size
+        
+        # 跳转到对应页
+        if page != self.current_page:
+            self.current_page = page
+            self.update_table()
+            
+        # 计算在当前页中的行号
+        row_in_page = row_num % self.page_size
+        
+        # 选中对应的行并滚动到可见区域
+        model_index = self.table_view.model().index(row_in_page, 0)
+        self.table_view.scrollTo(model_index, self.table_view.PositionAtCenter)
+        self.table_view.selectRow(row_in_page)
+        self.table_view.setFocus()
+
+        
     def show_command_config(self):
         """显示命令配置对话框"""
-        from plugins.command_executor import CommandConfigDialog
-        dialog = CommandConfigDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
-            # 重新加载插件以更新命令
-            self.plugin_manager.load_plugins()
+        dialog = CommandConfigDialog(self, variables=self.variables)
+        dialog.exec_()
+
+        
+    def show_command_config(self):
+        """显示命令配置对话框"""
+        dialog = CommandConfigDialog(self, variables=self.variables)
+        dialog.exec_()
+
+    def set_variables(self, variables: dict):
+        """设置变量字典
+        
+        Args:
+            variables: 要设置的变量字典
+        """
+        self.variables = variables
+
+    def load_csv_file(self, file_path=None):
+        """加载CSV文件
+        Args:
+            file_path: 可选，直接指定要加载的文件路径。如果不指定，则弹出文件选择对话框。
+        """
+        if not file_path:
+            file_path, _ = QFileDialog.getOpenFileName(self, "打开CSV文件", "", "CSV文件 (*.csv)")
+            
+        if file_path:
+            try:
+                # 更新标题显示文件名
+                filename = os.path.basename(file_path)
+                self.update_title(filename)
+                
+                # 加载文件
+                load_thread = self.data_manager.load_file(file_path)
+                load_thread.error.connect(lambda e: QMessageBox.critical(self, "错误", f"加载文件失败(文件可能为空))"))
+                load_thread.progress.connect(lambda p: self.status_bar.showMessage(f"正在加载文件: {p}%"))
+                load_thread.finished.connect(lambda: self.status_bar.showMessage(f"已加载文件: {file_path}"))
+                
+                self.current_file = file_path
+                
+                # 更新表格和搜索结果
+                self.data_manager.data_changed.connect(self.update_table)
+                self.search_result_view.clear()
+                
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"加载文件失败: {str(e)}")

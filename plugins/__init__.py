@@ -28,6 +28,11 @@ class BasePlugin(ABC):
         return "1.0.0"
         
     @property
+    def category(self) -> str:
+        """插件分类"""
+        return "未分类"
+        
+    @property
     def file_pattern(self) -> Optional[Union[str, Pattern]]:
         """文件名匹配模式
         
