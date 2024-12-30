@@ -104,6 +104,16 @@ class SearchResultView(QWidget):
         
         # 设置行高自适应
         self.result_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        
+        # 连接双击信号
+        self.result_table.itemDoubleClicked.connect(self._on_item_double_clicked)
+
+    def _on_item_double_clicked(self, item):
+        """处理双击事件"""
+        row = item.row()
+        # 获取行号单元格中的值（需要减1因为显示时加了1）
+        row_num = int(self.result_table.item(row, 0).text()) - 1
+        self.item_double_clicked.emit(row_num)
 
     def update_results(self, results):
         """更新搜索结果"""

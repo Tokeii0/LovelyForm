@@ -121,16 +121,19 @@ class CustomCommandPlugin(CellPlugin):
             
         # 添加当前选中单元格的值作为变量
         variables = {
-            **{k: v for k, v in self.variables.items()},  # 复制系统变量
+            **self.variables,  # 使用系统变量
             "value": value  # 添加当前选中的单元格值
         }
             
         # 替换变量
         result = text
         for var_name, var_value in variables.items():
-            # 确保变量名格式正确
+            if var_value is None:
+                continue
+            # 确保变量名格式正确，支持 ${var} 格式
             placeholder = "${" + var_name + "}"
-            result = result.replace(placeholder, str(var_value))
+            if placeholder in result:
+                result = result.replace(placeholder, str(var_value))
             
         return result
         
@@ -151,19 +154,20 @@ class CustomCommandPlugin(CellPlugin):
             source_model = proxy_model.sourceModel()
             
             for row, col in selected_cells:
-                # 将视图索引转换为源模型索引
-                proxy_index = proxy_model.index(row, col)
-                source_index = proxy_model.mapToSource(proxy_index)
-                source_row = source_index.row()
-                source_col = source_index.column()
+                # 获取页面信息
+                page_size = getattr(main_window, 'page_size', 100)
+                current_page = getattr(main_window, 'current_page', 0)
+                
+                # 计算在完整数据集中的行索引
+                absolute_row = current_page * page_size + row
                 
                 # 获取列名并检查是否启用
-                col_name = df.columns[source_col]
+                col_name = df.columns[col]
                 if not self.is_column_enabled(col_name):
                     continue
                     
-                # 使用源模型索引获取值，并去除引号
-                value = str(df.iloc[source_row, source_col]).strip('"')
+                # 使用绝对行索引获取值，并去除引号
+                value = str(df.iloc[absolute_row, col]).strip('"')
                 
                 # 获取选择的路径并替换变量
                 path = self._replace_variables(self.paths.get(self.command_config.path_name, ""))
@@ -203,7 +207,8 @@ class CustomCommandPlugin(CellPlugin):
                     def run_command():
                         try:
                             print(f"\n[*] 开始执行命令: {command}")
-                            process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                            process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                                                    encoding='utf-8', errors='replace')
                             stdout, stderr = process.communicate()
                             
                             # 打印命令输出
@@ -324,7 +329,7 @@ def get_command_plugins() -> Dict[str, CellPlugin]:
                 # 读取image_info.txt并解析内容
                 variables = {}
                 try:
-                    with open("output/image_info.txt", "r") as var_f:
+                    with open("output/image_info.txt", "r", encoding="utf-8") as var_f:
                         content = var_f.read().strip()
                         mem_path, profile = content.split(",")
                         variables["mem_path"] = mem_path
@@ -357,7 +362,7 @@ class CommandConfigDialog(QDialog):
         
         # 读取image_info.txt并解析内容
         try:
-            with open("output/image_info.txt", "r") as f:
+            with open("output/image_info.txt", "r", encoding="utf-8") as f:
                 content = f.read().strip()
                 mem_path, profile = content.split(",")
                 # 添加到变量中

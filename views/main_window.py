@@ -4,7 +4,7 @@ from lovelyform.views.statistics_view import StatisticsView
 from lovelyform.plugins.plugin_manager import PluginManager
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLineEdit, QLabel, QSpinBox, QTableView,
-                             QHeaderView, QMessageBox, QMenu, QFileDialog, QToolBar,
+                             QHeaderView, QAbstractItemView, QMessageBox, QMenu, QFileDialog, QToolBar,
                              QCheckBox, QInputDialog, QDialog, QGroupBox, QFrame,
                              QProgressBar, QSplitter, QApplication)
 from PySide6.QtCore import Qt, QSortFilterProxyModel
@@ -287,7 +287,7 @@ class CSVViewer(QMainWindow, UIComponentMixin, TableOperationsMixin,
         
         # 选中对应的行并滚动到可见区域
         model_index = self.table_view.model().index(row_in_page, 0)
-        self.table_view.scrollTo(model_index, self.table_view.PositionAtCenter)
+        self.table_view.scrollTo(model_index, QAbstractItemView.ScrollHint.PositionAtCenter)
         self.table_view.selectRow(row_in_page)
         self.table_view.setFocus()
 

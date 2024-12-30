@@ -64,10 +64,10 @@ class TableOperationsMixin:
         # 设置自定义的ItemDelegate
         self.table_view.setItemDelegate(TableItemDelegate())
         
-        # 启用排序
+        # 启用手动排序功能
         self.table_view.setSortingEnabled(True)
-        self.proxy_model.setDynamicSortFilter(True)
-        self.table_view.horizontalHeader().sortIndicatorChanged.connect(self.on_sort_changed)
+        self.proxy_model.setDynamicSortFilter(False)  # 禁用动态排序
+        self.table_view.horizontalHeader().sectionClicked.connect(self.on_header_clicked)
         
         # 添加列宽调整标志
         self._column_widths_adjusted = False
@@ -110,14 +110,17 @@ class TableOperationsMixin:
         if self.data_manager is None or self.data_manager.df is None or self.data_manager.df.empty:
             return
             
+        # 清除当前选择状态
+        self.table_view.clearSelection()
+            
         # 计算当前页的数据范围
         page_size = self.page_size_spin.value() if hasattr(self, 'page_size_spin') else self.page_size
         start = self.current_page * page_size
         end = min(start + page_size, len(self.data_manager.df))
         
-        # 更新模型
+        # 更新模型，传入页面偏移量
         current_df = self.data_manager.df.iloc[start:end]
-        model = PandasModel(current_df)
+        model = PandasModel(current_df, page_offset=start)
         self.proxy_model.setSourceModel(model)
         
         # 更新列选择下拉框
@@ -203,20 +206,37 @@ class TableOperationsMixin:
         if self.data_manager.df.empty:
             return
             
-        column_name = self.table_view.model().headerData(logical_index, Qt.Horizontal, Qt.DisplayRole)
+        column_name = self.data_manager.df.columns[logical_index]
         if not column_name:
             return
             
         ascending = order == Qt.AscendingOrder
         self.status_bar.showMessage(f"正在排序 {column_name} 列...")
         
-        # 获取排序后的索引
-        sorted_df = self.data_manager.df.sort_values(by=column_name, ascending=ascending)
-        # 重置索引，这样DataFrame的顺序将与显示顺序一致
-        self.data_manager.df = sorted_df.reset_index(drop=True)
-        # 更新显示
-        self.update_table()
-        self.status_bar.showMessage(f"排序完成 {column_name} 列。")
+        try:
+            # 对整个数据集进行排序
+            sorted_df = self.data_manager.df.sort_values(by=column_name, ascending=ascending)
+            # 重置索引，这样DataFrame的顺序将与显示顺序一致
+            self.data_manager.df = sorted_df.reset_index(drop=True)
+            
+            # 重置到第一页
+            self.current_page = 0
+            
+            # 更新显示
+            self.update_table()
+            
+            # 更新分页控件
+            self.update_page_label()
+            if hasattr(self, 'prev_btn'):
+                self.prev_btn.setEnabled(False)  # 回到第一页，禁用上一页按钮
+            if hasattr(self, 'next_btn'):
+                total_pages = (len(self.data_manager.df) - 1) // self.page_size + 1
+                self.next_btn.setEnabled(total_pages > 1)
+            
+            self.status_bar.showMessage(f"排序完成：{column_name} 列 {'升序' if ascending else '降序'}", 3000)
+            
+        except Exception as e:
+            self.status_bar.showMessage(f"排序失败：{str(e)}", 3000)
 
     def create_context_menu(self, pos):
         """创建右键菜单"""
@@ -350,15 +370,24 @@ class TableOperationsMixin:
             
         # 过滤出匹配列名模式的单元格
         filtered_cells = []
-        model = self.table_view.model()
-        if model is None:
+        proxy_model = self.table_view.model()
+        source_model = proxy_model.sourceModel()
+        if source_model is None:
             return
             
+        # 获取当前页的偏移量
+        page_size = self.page_size_spin.value() if hasattr(self, 'page_size_spin') else self.page_size
+        page_offset = self.current_page * page_size
+            
         for index in indexes:
-            col_index = index.column()
-            col_name = model.headerData(col_index, Qt.Horizontal, Qt.DisplayRole)
+            # 将代理模型的索引转换为源模型的索引
+            source_index = proxy_model.mapToSource(index)
+            col_index = source_index.column()
+            col_name = source_model.headerData(col_index, Qt.Horizontal, Qt.DisplayRole)
             if plugin.match_column(col_name):
-                filtered_cells.append((index.row(), col_index))
+                # 使用源模型的行索引加上页面偏移量
+                absolute_row = source_index.row() + page_offset
+                filtered_cells.append((absolute_row, col_index))
                 
         if filtered_cells:
             try:
@@ -528,3 +557,26 @@ class TableOperationsMixin:
             # 更新列的可见性
             for i, column in enumerate(columns):
                 self.table_view.setColumnHidden(i, column not in visible_columns)
+
+    def on_header_clicked(self, logical_index):
+        """处理表头点击事件"""
+        # 获取当前排序状态
+        order = self.table_view.horizontalHeader().sortIndicatorOrder()
+        # 获取当前排序列
+        current_sort_column = self.table_view.horizontalHeader().sortIndicatorSection()
+        
+        # 如果点击的列是当前排序列，则切换排序顺序
+        if logical_index == current_sort_column:
+            if order == Qt.AscendingOrder:
+                order = Qt.DescendingOrder
+            else:
+                order = Qt.AscendingOrder
+        # 否则，设置新的排序列和顺序
+        else:
+            order = Qt.AscendingOrder
+        
+        # 更新排序状态
+        self.table_view.horizontalHeader().setSortIndicator(logical_index, order)
+        
+        # 触发排序变化事件
+        self.on_sort_changed(logical_index, order)

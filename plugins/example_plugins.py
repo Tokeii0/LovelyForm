@@ -11,6 +11,7 @@ import yaml
 import os
 import subprocess
 import shutil
+from PySide6.QtCore import Qt
 
 from plugin.vol2 import Vol2
 
@@ -34,37 +35,48 @@ def readconfig():
 
 def get_sorted_cell_value(df: pd.DataFrame, row: int, col: int) -> str:
     """
-    获取排序后的表格中指定单元格的实际值
+    获取表格中指定单元格的实际值
     
     Args:
-        df: DataFrame对象
+        df: DataFrame对象（仅作为备用）
         row: 视图中的行索引
         col: 视图中的列索引
         
     Returns:
         str: 单元格的值
     """
-    # 获取主窗口实例
-    main_window = QApplication.activeWindow()
-    if not main_window:
-        return str(df.iloc[row, col])
+    try:
+        # 获取主窗口实例
+        main_window = QApplication.activeWindow()
+        if not main_window:
+            return str(df.iloc[row, col])
+            
+        # 获取表格视图
+        table_view = main_window.findChild(QTableView)
+        if not table_view:
+            return str(df.iloc[row, col])
         
-    # 获取表格视图和代理模型
-    table_view = main_window.findChild(QTableView)
-    if not table_view:
-        return str(df.iloc[row, col])
+        # 获取模型
+        model = table_view.model()
+        if not model:
+            return str(df.iloc[row, col])
+            
+        # 检查索引是否有效
+        if row < 0 or row >= model.rowCount() or col < 0 or col >= model.columnCount():
+            return str(df.iloc[row, col])
         
-    proxy_model = table_view.model()
-    source_model = proxy_model.sourceModel()
-    
-    # 将视图索引转换为源模型索引
-    proxy_index = proxy_model.index(row, col)
-    source_index = proxy_model.mapToSource(proxy_index)
-    source_row = source_index.row()
-    source_col = source_index.column()
-    
-    # 使用源模型索引获取值
-    return str(df.iloc[source_row, source_col])
+        # 直接从视图模型中获取值
+        index = model.index(row, col)
+        value = model.data(index)
+        
+        # 确保返回有效的值
+        if value is None or value == '':
+            return str(df.iloc[row, col])
+            
+        return str(value)
+    except Exception:
+        # 如果出现任何错误，回退到使用 DataFrame
+        return str(df.iloc[row, col])
 
 def set_sorted_cell_value(df: pd.DataFrame, row: int, col: int, value: str) -> None:
     """
@@ -89,16 +101,30 @@ def set_sorted_cell_value(df: pd.DataFrame, row: int, col: int, value: str) -> N
         return
         
     proxy_model = table_view.model()
+    if not proxy_model:
+        df.iloc[row, col] = value
+        return
+        
     source_model = proxy_model.sourceModel()
+    if not source_model:
+        df.iloc[row, col] = value
+        return
+        
+    # 获取页面偏移量
+    page_size = getattr(main_window, 'page_size', 100)
+    current_page = getattr(main_window, 'current_page', 0)
+    page_offset = current_page * page_size
     
-    # 将视图索引转换为源模型索引
+    # 计算实际行索引（考虑分页）
+    absolute_row = row + page_offset
+    
+    # 将视图索引转换为源模型索引（考虑排序）
     proxy_index = proxy_model.index(row, col)
     source_index = proxy_model.mapToSource(proxy_index)
-    source_row = source_index.row()
     source_col = source_index.column()
     
-    # 使用源模型索引设置值
-    df.iloc[source_row, source_col] = value
+    # 使用绝对行索引和源模型列索引设置值
+    df.iloc[absolute_row, source_col] = value
 
 class TimelinePlugin(CellPlugin):
     @property
@@ -229,7 +255,7 @@ class Vol2PidDumptoGimpPlugin(CellPlugin):
         
     @property
     def category(self) -> str:
-        return "进程分析"
+        return "进程分析(CTF)"
         
     @property
     def file_pattern(self) -> str:
@@ -280,7 +306,7 @@ class Vol3PidDumptoGimpPlugin(CellPlugin):
         
     @property
     def category(self) -> str:
-        return "进程分析"
+        return "进程分析(CTF)"
         
     @property
     def file_pattern(self) -> str:
@@ -324,6 +350,53 @@ class Vol3PidDumptoGimpPlugin(CellPlugin):
             thread.daemon = True  # 设置为守护线程，这样主程序退出时线程也会退出
             thread.start()
 
+# 进程转储后通过GIMP打开 memprocfs
+class MemprocfsPidDumptoGimpPlugin(CellPlugin):
+    @property
+    def name(self) -> str:
+        return "进程转储后通过GIMP打开(memprocfs)"
+    
+    @property
+    def description(self) -> str:
+        return "将PidDump文件导出并通过GIMP打开"
+        
+    @property
+    def category(self) -> str:
+        return "进程分析(CTF)"
+        
+    @property
+    def file_pattern(self) -> str:
+        return "*"
+        
+    @property
+    def column_patterns(self) -> List[str]:
+        return ["*PID*"]
+
+    def process_cells(self, df: pd.DataFrame, selected_cells: List[tuple]) -> pd.DataFrame:
+        # 提取所选单元格内容
+        from plugin.memprocfs import MemprocfsPlugin
+        image_path = get_image_info_file()[0]
+        gimppath = readconfig()[3]
+        for row, col in selected_cells:
+            value = get_sorted_cell_value(df, row, col).strip('"')
+            print(f"获取到的 PID 值： {value}")
+            # 使用线程执行耗时操作
+            def process_dump():
+                procmemfile = rf'M:/pid/{value}/minidump/minidump.dmp'
+                os.makedirs('tmp', exist_ok=True)
+                newpath = r'tmp/minidump.data'
+                if os.path.exists(newpath):
+                    os.remove(newpath)
+                shutil.copy(procmemfile, newpath)
+                cmd2 = rf'"{gimppath}" tmp/minidump.data'
+                print('[*] 正在调用gimp执行命令：' + cmd2)
+                subprocess.Popen(cmd2, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                print('[+] 执行成功！')
+
+            from threading import Thread
+            thread = Thread(target=process_dump)
+            thread.daemon = True  # 设置为守护线程，这样主程序退出时线程也会退出
+            thread.start()
 # 导出该文件(vol2-dumpfile)
 class Vol2DumpFilePlugin(CellPlugin):
     @property

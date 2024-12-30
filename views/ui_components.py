@@ -82,7 +82,7 @@ class UIComponentMixin:
         self.next_btn = QPushButton("下一页")
         self.page_label = QLabel("页码: 0/0")
         self.page_size_spin = QSpinBox()
-        self.page_size_spin.setRange(10, 1000)
+        self.page_size_spin.setRange(10,100000)
         self.page_size_spin.setValue(100)
         self.page_size_spin.setSingleStep(10)
         self.page_size_spin.setMinimumWidth(100)  # 设置最小宽度

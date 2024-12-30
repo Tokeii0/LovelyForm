@@ -5,10 +5,11 @@ import pandas as pd
 class PandasModel(QAbstractTableModel):
     dataChanged = Signal(QModelIndex, QModelIndex)
 
-    def __init__(self, data: pd.DataFrame):
+    def __init__(self, data: pd.DataFrame, page_offset: int = 0):
         super().__init__()
         self._data = data
         self.highlight_text = ""
+        self.page_offset = page_offset
         # 缓存数据转换结果以提高性能
         self._str_cache = {}
 
@@ -25,6 +26,10 @@ class PandasModel(QAbstractTableModel):
             value = self._data.iloc[row, col]
             self._str_cache[cache_key] = str(value) if pd.notna(value) else ''
         return self._str_cache[cache_key]
+
+    def get_absolute_row(self, row):
+        """获取实际的行索引（考虑页面偏移）"""
+        return row + self.page_offset
 
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid():
@@ -45,7 +50,8 @@ class PandasModel(QAbstractTableModel):
             if orientation == Qt.Horizontal:
                 return str(self._data.columns[section])
             else:
-                return str(section + 1)
+                # 显示实际的行号（考虑页面偏移）
+                return str(self.get_absolute_row(section) + 1)
         elif role == Qt.TextAlignmentRole:
             return Qt.AlignLeft | Qt.AlignVCenter
         return None
