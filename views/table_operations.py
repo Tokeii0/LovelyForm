@@ -64,10 +64,9 @@ class TableOperationsMixin:
         # 设置自定义的ItemDelegate
         self.table_view.setItemDelegate(TableItemDelegate())
         
-        # 启用手动排序功能
-        self.table_view.setSortingEnabled(True)
+        # 完全禁用排序功能
+        self.table_view.setSortingEnabled(False)
         self.proxy_model.setDynamicSortFilter(False)  # 禁用动态排序
-        self.table_view.horizontalHeader().sectionClicked.connect(self.on_header_clicked)
         
         # 添加列宽调整标志
         self._column_widths_adjusted = False
@@ -118,10 +117,21 @@ class TableOperationsMixin:
         start = self.current_page * page_size
         end = min(start + page_size, len(self.data_manager.df))
         
-        # 更新模型，传入页面偏移量
-        current_df = self.data_manager.df.iloc[start:end]
+        # 更新模型，保持原始索引
+        current_df = self.data_manager.df.iloc[start:end].copy()
+        current_df.index = range(start, end)  # 设置连续的索引，这样会保持原始行号
         model = PandasModel(current_df, page_offset=start)
+        
+        # 保持高亮文本
+        if hasattr(self, 'data_model') and hasattr(self.data_model, 'highlight_text'):
+            model.highlight_text = self.data_model.highlight_text
+        self.data_model = model
+        
         self.proxy_model.setSourceModel(model)
+        
+        # 确保proxy_model不会进行排序
+        self.proxy_model.setDynamicSortFilter(False)
+        self.proxy_model.sort(-1, Qt.AscendingOrder)  # 清除任何现有的排序
         
         # 更新列选择下拉框
         self.column_combo.blockSignals(True)
@@ -408,10 +418,16 @@ class TableOperationsMixin:
         """处理表格插件"""
         if hasattr(self, 'data_manager'):
             result = plugin.process_table(self.data_manager.df)
-            # 在新窗口中显示结果
+            # 直接更新原表格数据
             if isinstance(result, pd.DataFrame):
-                dialog = StatisticsView(result, self)
-                dialog.exec_()
+                self.data_manager.df = result
+                if hasattr(plugin, 'highlight_keywords') and plugin.highlight_keywords:
+                    # 设置高亮关键词和颜色
+                    self.data_model.highlight_keywords = plugin.highlight_keywords.copy()
+                    # 强制刷新显示
+                    self.proxy_model.layoutChanged.emit()
+                else:
+                    self.update_table()  # 刷新表格显示
             else:
                 QMessageBox.information(self, "处理结果", str(result))
 

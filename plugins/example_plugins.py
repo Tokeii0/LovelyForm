@@ -4,15 +4,18 @@ from numpy import imag
 import pandas as pd
 from typing import List
 import re
-import importlib
+import importlib,json
 from lovelyform.plugins import CellPlugin, TablePlugin
-from PySide6.QtWidgets import QApplication, QTableView, QInputDialog, QStyledItemDelegate
+from PySide6.QtWidgets import QApplication, QTableView, QInputDialog, QStyledItemDelegate, QWidget, QVBoxLayout, QLabel, QLineEdit, QMessageBox
+from PySide6.QtCore import Qt,QObject,Signal,QThread
+from PySide6.QtWidgets import QDialog, QApplication, QTreeWidget, QTreeWidgetItem
+from PySide6.QtGui import QColor
 import yaml
 import os
 import subprocess
 import shutil
 from PySide6.QtCore import Qt
-
+from PySide6.QtWidgets import QDialog, QApplication, QTreeWidget, QTreeWidgetItem, QVBoxLayout
 from plugin.vol2 import Vol2
 
 def get_image_info_file():
@@ -302,7 +305,7 @@ class Vol3PidDumptoGimpPlugin(CellPlugin):
     
     @property
     def description(self) -> str:
-        return "将PidDump文件导出并通过GIMP打开"
+        return "将PidDump文件导出"
         
     @property
     def category(self) -> str:
@@ -688,3 +691,249 @@ class DataStatisticsPlugin(TablePlugin):
         final_stats.index = final_stats.index.map(lambda x: index_map.get(x, x))
         
         return final_stats
+
+# 全局插件，替换指定关键词
+class ReplaceKeywordPlugin(TablePlugin):
+    def __init__(self):
+        super().__init__()
+        
+    @property
+    def name(self) -> str:
+        return "关键词替换"
+        
+    @property
+    def description(self) -> str:
+        return "将表格中指定的关键词替换为目标文本"
+        
+    @property
+    def category(self) -> str:
+        return "文本处理"
+        
+    @property
+    def button_text(self) -> str:
+        return "替换关键词"
+        
+    def create_config_widget(self) -> None:
+        # 返回None表示不需要配置窗口
+        return None
+        
+    def process_table(self, df: pd.DataFrame) -> pd.DataFrame:
+        # 弹出对话框获取关键词
+        source_text, ok = QInputDialog.getText(None, "输入关键词", "请输入要替换的关键词:")
+        if not ok or not source_text:
+            return df
+            
+        target_text, ok = QInputDialog.getText(None, "输入替换文本", "请输入替换后的文本:")
+        if not ok or not target_text:
+            return df
+            
+        # 在原表格内直接替换关键词
+        df = df.replace(source_text, target_text)
+        return df
+
+
+# 全局插件，高亮指定关键词 所在行
+class HighlightKeywordPlugin(TablePlugin):
+    def __init__(self):
+        super().__init__()
+        self.highlight_keywords = {}
+        self.search_task = None
+        self.worker = None
+        
+    @property
+    def name(self) -> str:
+        return "关键词高亮"
+        
+    @property
+    def description(self) -> str:
+        return "高亮表格中指定的关键词所在行"
+        
+    @property
+    def category(self) -> str:
+        return "文本处理"
+        
+    @property
+    def button_text(self) -> str:
+        return "关键词高亮"
+        
+    def create_config_widget(self) -> None:
+        return None
+        
+    def get_random_color(self):
+        """生成随机的高亮颜色"""
+        import random
+        
+        # 预定义一些好看的高亮颜色组合
+        colors = [
+            (255, 200, 200),  # 淡红色
+            (200, 255, 200),  # 淡绿色
+            (200, 200, 255),  # 淡蓝色
+            (255, 255, 200),  # 淡黄色
+            (255, 200, 255),  # 淡紫色
+            (200, 255, 255),  # 淡青色
+            (255, 220, 180),  # 淡橙色
+            (220, 180, 255),  # 淡紫罗兰
+            (180, 255, 220),  # 淡薄荷绿
+            (255, 180, 220),  # 淡粉红
+            (220, 255, 180),  # 淡黄绿
+            (180, 220, 255),  # 淡天蓝
+            (255, 240, 200),  # 淡杏色
+            (240, 200, 255),  # 淡丁香紫
+            (200, 255, 240),  # 淡蓝绿
+            (255, 200, 180),  # 淡珊瑚色
+            (200, 180, 255),  # 淡薰衣草
+            (180, 255, 200)   # 淡青柠
+        ]
+        
+        # 随机选择一个颜色组合
+        r, g, b = random.choice(colors)
+        return QColor(r, g, b, 120)  # 增加不透明度到120
+        
+    def search_keywords(self, df: pd.DataFrame, progress_callback):
+        try:
+            import re  # 将re的导入移到函数开始处
+            
+            # 读取配置文件
+            with open('lovelyform/config/highlight.json', 'r', encoding='utf-8') as f:
+                highlight_config = json.load(f)
+                
+            # 清空之前的高亮关键词
+            self.highlight_keywords.clear()
+                
+            # 遍历所有配置的关键词
+            for config in highlight_config:
+                if 'keyword' in config and 'msg' in config:
+                    keyword = config['keyword']
+                    msg = config['msg']
+                    is_regex = config.get('is_regex', False)
+                    
+                    try:
+                        # 根据关键词类型选择不同的匹配方式
+                        if is_regex:
+                            # 使用正则表达式匹配
+                            try:
+                                pattern = re.compile(keyword, re.IGNORECASE)
+                            except re.error as e:
+                                print(f"正则表达式编译错误 '{keyword}': {str(e)}")
+                                continue
+                                
+                            # 对每一列进行匹配
+                            matches = []
+                            matched_content = set()  # 使用set避免重复
+                            
+                            for col in df.columns:
+                                col_str = df[col].astype(str)
+                                for idx, value in col_str.items():
+                                    if pattern.search(value):
+                                        matches.append(idx)
+                                        matched_content.add(value)
+                                        
+                            if matches:
+                                print(f"[{keyword}] {msg}")
+                                print(f"匹配到的内容: {', '.join(matched_content)}")
+                                
+                                # 创建掩码用于高亮显示
+                                mask = df.index.isin(matches)
+                                if mask.any():
+                                    # 为每个关键词生成随机颜色
+                                    color = self.get_random_color()
+                                    self.highlight_keywords[keyword] = color
+                                    
+                        elif keyword.isdigit():  # 如果是纯数字（端口号）
+                            # 使用正则表达式匹配端口号格式
+                            pattern = re.compile(fr'\b{keyword}\b')
+                            matches = []
+                            matched_content = set()
+                            
+                            for col in df.columns:
+                                col_str = df[col].astype(str)
+                                for idx, value in col_str.items():
+                                    if pattern.search(value):
+                                        matches.append(idx)
+                                        matched_content.add(value)
+                                        
+                            if matches:
+                                print(f"[{keyword}] {msg}")
+                                print(f"匹配到的内容: {', '.join(matched_content)}")
+                                
+                                mask = df.index.isin(matches)
+                                self.highlight_keywords[keyword] = self.get_random_color()
+                                
+                        elif keyword.endswith('.exe'):  # 如果是进程名
+                            # 进程名需要精确匹配，避免路径中的误匹配
+                            pattern = re.compile(fr'(?i)\b{re.escape(keyword)}\b')
+                            matches = []
+                            matched_content = set()
+                            
+                            for col in df.columns:
+                                col_str = df[col].astype(str)
+                                for idx, value in col_str.items():
+                                    if pattern.search(value):
+                                        matches.append(idx)
+                                        matched_content.add(value)
+                                        
+                            if matches:
+                                print(f"[{keyword}] {msg}")
+                                print(f"匹配到的内容: {', '.join(matched_content)}")
+                                
+                                mask = df.index.isin(matches)
+                                self.highlight_keywords[keyword] = self.get_random_color()
+                                
+                        else:  # 其他关键词
+                            # 普通关键词使用包含匹配
+                            pattern = re.compile(re.escape(keyword), re.IGNORECASE)
+                            matches = []
+                            matched_content = set()
+                            
+                            for col in df.columns:
+                                col_str = df[col].astype(str)
+                                for idx, value in col_str.items():
+                                    if pattern.search(value):
+                                        matches.append(idx)
+                                        matched_content.add(value)
+                                        
+                            if matches:
+                                print(f"[{keyword}] {msg}")
+                                print(f"匹配到的内容: {', '.join(matched_content)}")
+                                
+                                mask = df.index.isin(matches)
+                                self.highlight_keywords[keyword] = self.get_random_color()
+                                
+                    except Exception as e:
+                        print(f"处理关键词 '{keyword}' 时出错: {str(e)}")
+                        continue
+                        
+            return df
+        except Exception as e:
+            QMessageBox.warning(None, "错误", f"读取配置文件失败: {str(e)}")
+            return df
+            
+    def process_table(self, df: pd.DataFrame) -> pd.DataFrame:
+        """处理表格数据"""
+        if not hasattr(self, 'highlight_keywords'):
+            self.highlight_keywords = {}
+            
+        print("开始处理表格数据...")
+        # 开始搜索关键词
+        self.search_keywords(df, self.update_progress)
+        
+        #print(f"高亮关键词和颜色: {self.highlight_keywords}")
+        # 返回原始DataFrame，高亮效果会通过 highlight_keywords 属性传递给表格模型
+        return df
+        
+    def update_progress(self, value):
+        # 更新进度条或状态栏
+        print(f"搜索进度: {value}%")
+        
+class SearchWorker(QObject):
+    finished = Signal()
+    progress = Signal(int)
+    
+    def __init__(self, df):
+        super().__init__()
+        self.df = df
+        
+    def run(self):
+        # 执行搜索操作
+        HighlightKeywordPlugin().search_keywords(self.df, self.progress)
+        self.finished.emit()

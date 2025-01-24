@@ -8,10 +8,12 @@ class PandasModel(QAbstractTableModel):
     def __init__(self, data: pd.DataFrame, page_offset: int = 0):
         super().__init__()
         self._data = data
-        self.highlight_text = ""
+        self.highlight_keywords = {}  # 改为字典，存储关键词和对应的颜色
         self.page_offset = page_offset
         # 缓存数据转换结果以提高性能
         self._str_cache = {}
+        # 添加行号索引，使用DataFrame的原始索引
+        self._row_indices = list(data.index)
 
     def rowCount(self, parent=QModelIndex()):
         return len(self._data)
@@ -39,10 +41,11 @@ class PandasModel(QAbstractTableModel):
             return self._get_str_value(index.row(), index.column())
         elif role == Qt.TextAlignmentRole:
             return Qt.AlignLeft | Qt.AlignVCenter
-        elif role == Qt.BackgroundRole and self.highlight_text:
+        elif role == Qt.BackgroundRole and self.highlight_keywords:
             text = self._get_str_value(index.row(), index.column()).lower()
-            if self.highlight_text.lower() in text:
-                return QColor(255, 255, 0, 70)
+            for keyword, color in self.highlight_keywords.items():
+                if keyword.lower() in text:
+                    return color
         return None
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
@@ -50,8 +53,9 @@ class PandasModel(QAbstractTableModel):
             if orientation == Qt.Horizontal:
                 return str(self._data.columns[section])
             else:
-                # 显示实际的行号（考虑页面偏移）
-                return str(self.get_absolute_row(section) + 1)
+                # 使用原始索引获取行号
+                original_index = self._row_indices[section]
+                return str(original_index + 1)
         elif role == Qt.TextAlignmentRole:
             return Qt.AlignLeft | Qt.AlignVCenter
         return None
@@ -82,6 +86,8 @@ class PandasModel(QAbstractTableModel):
         """更新模型的数据"""
         self.beginResetModel()
         self._data = new_data
+        # 更新行号索引，保持原始索引
+        self._row_indices = list(new_data.index)
         self._str_cache.clear()  # 清除缓存
         self.endResetModel()
 
@@ -90,13 +96,5 @@ class PandasModel(QAbstractTableModel):
         self._str_cache.clear()
 
     def sort(self, column, order):
-        """排序功能"""
-        try:
-            ascending = order == Qt.AscendingOrder
-            self._data = self._data.sort_values(by=self._data.columns[column], ascending=ascending)
-            # 清除缓存，因为数据已经改变
-            self._str_cache.clear()
-            # 通知视图数据已经改变
-            self.layoutChanged.emit()
-        except Exception as e:
-            print(f"排序出错: {str(e)}")
+        """排序功能 - 保持原始行号顺序，禁用排序"""
+        return False
